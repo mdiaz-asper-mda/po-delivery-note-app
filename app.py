@@ -31,8 +31,16 @@ TEMPLATE_PATH = "Trailhead Biosystems Inc_Delivery Note.xlsx"
 st.set_page_config(page_title="Invoice and Delivery Note Tool", layout="wide")
 st.title("Invoice and Delivery Note Tool")
 
+# Load API key (Streamlit Cloud first, fallback to local .env)
+if "GEMINI_API_KEY" in st.secrets:
+    api_key = st.secrets["GEMINI_API_KEY"]
+else:
+    from dotenv import load_dotenv
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY")
+
 if not api_key:
-    st.error("GEMINI_API_KEY not found in .env file")
+    st.error("GEMINI_API_KEY not found. Check Streamlit secrets.")
     st.stop()
 
 client = genai.Client(api_key=api_key)
