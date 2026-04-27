@@ -19,7 +19,12 @@ from openpyxl.cell.cell import MergedCell
 
 
 load_dotenv()
-api_key = st.secrets["GEMINI_API_KEY"]
+if "GEMINI_API_KEY" in st.secrets:
+    api_key = st.secrets["GEMINI_API_KEY"]
+else:
+    from dotenv import load_dotenv
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY")
 
 TEMPLATE_PATH = "Trailhead Biosystems Inc_Delivery Note.xlsx"
 
