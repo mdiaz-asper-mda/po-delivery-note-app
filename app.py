@@ -305,6 +305,17 @@ def is_shipping_line(description):
     shipping_words = ["shipping", "delivery", "handling", "freight"]
     return any(word in text for word in shipping_words)
 
+def standardize_component_name(text):
+    if text is None:
+        return ""
+
+    text = str(text).strip()
+
+    # Change Comp to Component, but leave "Component" already written alone
+    text = re.sub(r"\bComp\b", "Component", text)
+
+    return text
+
 
 def build_standard_storage_text(product_name):
     return (
@@ -527,13 +538,16 @@ def build_delivery_note_items_from_quote(quote_data):
 
         product_name_for_storage = desc if desc else ("" if match is None else match["title"])
 
+        
+        product_name_for_storage = "" if match is None else match["title"]
+
         delivery_items.append({
             "description": desc,
             "sku": sku,
             "quantity": item.get("quantity", ""),
             "catalog_match": match,
-            "display_title": desc,
-            "reagents": [] if match is None else list(match["reagents"]),
+            "display_title": "" if match is None else match["title"],
+            "reagents": [] if match is None else [standardize_component_name(r) for r in match["reagents"]],
             "storage_note": build_standard_storage_text(product_name_for_storage) if match is not None else ""
         })
 
