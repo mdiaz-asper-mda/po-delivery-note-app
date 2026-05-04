@@ -660,20 +660,20 @@ def populate_delivery_note_template(workbook_path, output_path, po_number, deliv
     if len(matched_items) >= 1:
         item1 = matched_items[0]
 
-        ws["G18"] = item1["display_title"]               # [Product name]
-        ws["G20"] = item1["display_title"]               # [Product full name]
+        ws["G18"] = item1["display_title"]  # Product name
+        ws["G20"] = item1["display_title"]  # Full name
 
         start_row = 21
         for i, comp in enumerate(item1["contents"]):
             ws[f"G{start_row + i}"] = standardize_component_name(comp)
 
     # -------------------
-    # PRODUCT 2 (optional)
+    # PRODUCT 2 (FIXED ROW)
     # -------------------
     if len(matched_items) >= 2:
         item2 = matched_items[1]
 
-        ws["G30"] = item2["display_title"]
+        ws["G29"] = item2["display_title"]  # <-- FIXED HERE
         ws["G32"] = item2["display_title"]
 
         start_row = 33
