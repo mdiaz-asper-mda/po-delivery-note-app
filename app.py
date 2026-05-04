@@ -636,63 +636,103 @@ def set_cell_value_safe(ws, cell_ref=None, row=None, col=None, value=""):
     target.value = value
 
 
-def populate_delivery_note_template(workbook_path, output_path, po_number, display_title, reagents, storage_note):
+def build_combined_storage_text(delivery_items):
+    product_names = []
+
+    for item in delivery_items:
+        name = item.get("display_title", "")
+        if name and name not in product_names:
+            product_names.append(name)
+
+    product_storage_lines = [
+        f'Store "{name}" in LN2 storage upon receipt.'
+        for name in product_names
+    ]
+
+    return (
+        "Store all Component in -20C or -80C storage upon receipt.\n"
+        + "\n".join(product_storage_lines)
+        + "\n\n"
+        + "Support:\n"
+        + "In case you need any assistance from us, please do not hesitate to email us or call us at\n"
+        + "Email: cs@biosciences.ricoh.com\n"
+        + "Phone: +1-443-869-5420\n\n"
+        + "We look forward to providing more products and services to you in the future."
+    )
+
+
+def populate_delivery_note_template(workbook_path, output_path, po_number, delivery_items):
     wb = load_workbook(workbook_path)
     ws = wb[choose_template_sheet_name(wb)]
 
     ws.sheet_view.showGridLines = False
 
-    # Only update the few fields the new template needs.
-    set_cell_value_safe(ws, cell_ref="G16", value=f"PO# {po_number}" if po_number else "PO#")
-    set_cell_value_safe(ws, cell_ref="G18", value=display_title)
+    matched_items = [item for item in delivery_items if item["catalog_match"] is not None]
 
-    # Contents section.
-    for row in range(20, 35):
+    set_cell_value_safe(ws, cell_ref="G16", value=f"PO# {po_number}" if po_number else "PO#")
+
+    # Clear old product area
+    for row in range(18, 90):
         set_cell_value_safe(ws, row=row, col=7, value="")
         set_cell_value_safe(ws, row=row, col=23, value="")
         set_cell_value_safe(ws, row=row, col=29, value="")
         set_cell_value_safe(ws, row=row, col=30, value="")
 
-    for idx, reagent in enumerate(reagents[:12]):
-        row = 20 + idx
-        set_cell_value_safe(ws, row=row, col=7, value=reagent)
-        set_cell_value_safe(ws, row=row, col=23, value="")
-        set_cell_value_safe(ws, row=row, col=29, value="")
-        set_cell_value_safe(ws, row=row, col=30, value="")
+    current_row = 18
 
-    # Storage and support section.
-    set_cell_value_safe(ws, cell_ref="A28", value=storage_note)
+    for item in matched_items:
+        title = item.get("display_title", "")
+        reagents = item.get("reagents", [])
+
+        set_cell_value_safe(ws, row=current_row, col=7, value=title)
+        current_row += 1
+
+        set_cell_value_safe(ws, row=current_row, col=7, value="Reagents")
+        set_cell_value_safe(ws, row=current_row, col=23, value="Lot#")
+        set_cell_value_safe(ws, row=current_row, col=29, value="Exp")
+        current_row += 1
+
+        for reagent in reagents:
+            set_cell_value_safe(ws, row=current_row, col=7, value=standardize_component_name(reagent))
+            set_cell_value_safe(ws, row=current_row, col=23, value="")
+            set_cell_value_safe(ws, row=current_row, col=29, value="")
+            set_cell_value_safe(ws, row=current_row, col=30, value="")
+            current_row += 1
+
+        # Blank space between product sections
+        current_row += 2
+
+    storage_text = build_combined_storage_text(matched_items)
+
+    # Put storage and support section after all product blocks
+    storage_row = current_row + 1
+    set_cell_value_safe(ws, row=storage_row, col=1, value=storage_text)
 
     wb.save(output_path)
 
 
 def generate_delivery_note_files(po_data, delivery_items, output_dir):
     os.makedirs(output_dir, exist_ok=True)
-    output_files = []
 
     matched_items = [item for item in delivery_items if item["catalog_match"] is not None]
 
-    for idx, item in enumerate(matched_items, start=1):
-        safe_name = re.sub(r"[^A-Za-z0-9 _()]+", "", item.get("display_title", "")).strip()
+    if not matched_items:
+        return []
 
-        if not safe_name:
-            safe_name = f"delivery_note_{idx}"
+    po_number = po_data.get("po_number", "PO")
+    safe_po = re.sub(r"[^A-Za-z0-9 _()]+", "", po_number).strip() or "PO"
 
-        filename = f"{po_data.get('po_number', 'PO')}_{idx}_{safe_name}.xlsx"
-        output_path = os.path.join(output_dir, filename)
+    filename = f"{safe_po}_delivery_note.xlsx"
+    output_path = os.path.join(output_dir, filename)
 
-        populate_delivery_note_template(
-            TEMPLATE_PATH,
-            output_path,
-            po_data.get("po_number", ""),
-            item.get("display_title", ""),
-            item.get("reagents", []),
-            item.get("storage_note", "")
-        )
+    populate_delivery_note_template(
+        TEMPLATE_PATH,
+        output_path,
+        po_data.get("po_number", ""),
+        matched_items
+    )
 
-        output_files.append(output_path)
-
-    return output_files
+    return [output_path]
 
 
 def create_zip_bundle(output_zip_path, quote_file, po_file, delivery_note_paths):
