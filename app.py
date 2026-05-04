@@ -16,6 +16,7 @@ from google.genai import types
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 from copy import copy
+from openpyxl.styles import Font
 
 
 TEMPLATE_PATH = "TEMPLATE_PO_APP_260504.xlsx"
@@ -652,64 +653,63 @@ def populate_delivery_note_template(workbook_path, output_path, po_number, deliv
     blue_font = Font(color="0000FF")
     black_font = Font(color="000000")
 
-    # -------------------
-    # PO NUMBER
-    # -------------------
-    ws["G16"] = f"PO# {po_number}" if po_number else "PO#"
-
     matched_items = [item for item in delivery_items if item["catalog_match"] is not None]
 
-    # -------------------
-    # PRODUCT 1
-    # -------------------
+    ws["G16"] = f"PO# {po_number}" if po_number else "PO#"
+
+    # Clear editable areas only
+    for cell_ref in ["G20", "G21", "G22", "G23", "G24", "G25", "G31", "G32", "G33", "G34", "G35", "G36", "A40"]:
+        ws[cell_ref] = ""
+        ws[cell_ref].font = black_font
+
+    # Product 1
     if len(matched_items) >= 1:
         item1 = matched_items[0]
+        contents1 = item1.get("contents", [])
 
         ws["G18"] = item1["display_title"]
+        ws["G18"].font = black_font
 
-        # Full name (BLUE)
-        ws["G20"] = item1["contents"][0] if item1["contents"] else ""
-        ws["G20"].font = blue_font
+        if contents1:
+            ws["G21"] = standardize_component_name(contents1[0])
+            ws["G21"].font = blue_font
 
-        # Components (BLACK)
-        start_row = 21
-        for i, comp in enumerate(item1["contents"][1:]):
+        start_row = 22
+        for i, comp in enumerate(contents1[1:]):
             cell = ws[f"G{start_row + i}"]
             cell.value = standardize_component_name(comp)
             cell.font = black_font
 
-    # -------------------
-    # PRODUCT 2 (SHIFTED UP)
-    # -------------------
+    # Product 2
     if len(matched_items) >= 2:
         item2 = matched_items[1]
+        contents2 = item2.get("contents", [])
 
         ws["G29"] = item2["display_title"]
+        ws["G29"].font = black_font
 
-        # Full name (BLUE) ← FIXED ROW
-        ws["G31"] = item2["contents"][0] if item2["contents"] else ""
-        ws["G31"].font = blue_font
+        if contents2:
+            ws["G32"] = standardize_component_name(contents2[0])
+            ws["G32"].font = blue_font
 
-        # Components (BLACK) ← SHIFTED UP
-        start_row = 32
-        for i, comp in enumerate(item2["contents"][1:]):
+        start_row = 33
+        for i, comp in enumerate(contents2[1:]):
             cell = ws[f"G{start_row + i}"]
             cell.value = standardize_component_name(comp)
             cell.font = black_font
 
-    # -------------------
-    # STORAGE LINE
-    # -------------------
+    # Storage line on row 40
     product_names = [item["display_title"] for item in matched_items]
 
     if len(product_names) == 1:
-        storage_text = f'Please store {product_names[0]} in LN2 storage upon receipt.'
+        storage_text = f"Please store {product_names[0]} in LN2 storage upon receipt."
     elif len(product_names) == 2:
-        storage_text = f'Please store {product_names[0]} and {product_names[1]} in LN2 storage upon receipt.'
+        storage_text = f"Please store {product_names[0]} and {product_names[1]} in LN2 storage upon receipt."
     else:
-        storage_text = f'Please store all products in LN2 storage upon receipt.'
+        storage_text = "Please store all products in LN2 storage upon receipt."
 
-    ws["A45"] = storage_text
+    ws["A40"] = storage_text
+    ws["A40"].font = black_font
 
     wb.save(output_path)
 
