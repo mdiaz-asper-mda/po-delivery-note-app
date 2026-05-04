@@ -18,24 +18,17 @@ from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 
 
-load_dotenv()
-if "GEMINI_API_KEY" in st.secrets:
-    api_key = st.secrets["GEMINI_API_KEY"]
-else:
-    from dotenv import load_dotenv
-    load_dotenv()
-    api_key = os.getenv("GEMINI_API_KEY")
-
+# =========================
+# CONFIG
+# =========================
 TEMPLATE_PATH = "Trailhead Biosystems Inc_Delivery Note (2).xlsx"
 
 st.set_page_config(page_title="Invoice and Delivery Note Tool", layout="wide")
 st.title("Invoice and Delivery Note Tool")
 
-# Load API key (Streamlit Cloud first, fallback to local .env)
 if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
 else:
-    from dotenv import load_dotenv
     load_dotenv()
     api_key = os.getenv("GEMINI_API_KEY")
 
@@ -45,6 +38,10 @@ if not api_key:
 
 client = genai.Client(api_key=api_key)
 
+
+# =========================
+# PRODUCT CATALOG
+# =========================
 PRODUCT_CATALOG = [
     {
         "key": "excitatory_cells",
@@ -239,13 +236,18 @@ PRODUCT_CATALOG = [
 ]
 
 
+# =========================
+# BASIC HELPERS
+# =========================
 def parse_json_response(raw_text):
     raw_text = raw_text.strip()
+
     if raw_text.startswith("```"):
         raw_text = raw_text.replace("```json", "").replace("```", "").strip()
 
     start = raw_text.find("{")
     end = raw_text.rfind("}")
+
     if start != -1 and end != -1 and end > start:
         raw_text = raw_text[start:end + 1]
 
@@ -257,10 +259,12 @@ def extract_text_from_pdf(uploaded_file):
         uploaded_file.seek(0)
         reader = PdfReader(uploaded_file)
         parts = []
+
         for page in reader.pages:
             page_text = page.extract_text()
             if page_text:
                 parts.append(page_text)
+
         return "\n".join(parts).strip()
     except Exception:
         return ""
@@ -271,10 +275,12 @@ def extract_text_from_pdf_bytes(file_bytes):
         buffer = io.BytesIO(file_bytes)
         reader = PdfReader(buffer)
         parts = []
+
         for page in reader.pages:
             page_text = page.extract_text()
             if page_text:
                 parts.append(page_text)
+
         return "\n".join(parts).strip()
     except Exception:
         return ""
@@ -288,30 +294,33 @@ def extract_text_from_txt(uploaded_file):
 def extract_file_text(uploaded_file):
     if uploaded_file.type == "application/pdf":
         return extract_text_from_pdf(uploaded_file)
+
     return extract_text_from_txt(uploaded_file)
 
 
 def normalize_for_match(value):
     if value is None:
         return ""
+
     text = str(value).lower().strip()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     text = " ".join(text.split())
+
     return text
 
 
 def is_shipping_line(description):
     text = normalize_for_match(description)
     shipping_words = ["shipping", "delivery", "handling", "freight"]
+
     return any(word in text for word in shipping_words)
+
 
 def standardize_component_name(text):
     if text is None:
         return ""
 
     text = str(text).strip()
-
-    # Change Comp to Component, but leave "Component" already written alone
     text = re.sub(r"\bComp\b", "Component", text)
 
     return text
@@ -319,20 +328,24 @@ def standardize_component_name(text):
 
 def build_standard_storage_text(product_name):
     return (
-        'Store all Component in -20C or -80C storage upon receipt.\n'
+        "Store all Component in -20C or -80C storage upon receipt.\n"
         f'Store "{product_name}" in LN2 storage upon receipt.\n\n'
-        'Support:\n'
-        'In case you need any assistance from us, please do not hesitate to email us or call us at\n'
-        'Email: cs@biosciences.ricoh.com\n'
-        'Phone: +1-443-869-5420\n\n'
-        'We look forward to providing more products and services to you in the future.'
+        "Support:\n"
+        "In case you need any assistance from us, please do not hesitate to email us or call us at\n"
+        "Email: cs@biosciences.ricoh.com\n"
+        "Phone: +1-443-869-5420\n\n"
+        "We look forward to providing more products and services to you in the future."
     )
 
 
+# =========================
+# GEMINI EXTRACTION
+# =========================
 @st.cache_data(show_spinner=False)
 def extract_quote_json_cached(file_bytes, mime_type):
     if mime_type == "application/pdf":
         pdf_part = types.Part.from_bytes(data=file_bytes, mime_type="application/pdf")
+
         prompt = """
 Extract only the fields needed for invoicing and delivery note creation from this quote.
 
@@ -361,13 +374,17 @@ Use this schema:
   ]
 }
 """
+
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
             contents=[pdf_part, prompt],
         )
+
         raw_text = response.text.strip()
+
     else:
         text = file_bytes.decode("utf-8")
+
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
             contents=f"""
@@ -401,6 +418,7 @@ Quote Text:
 {text}
 """,
         )
+
         raw_text = response.text.strip()
 
     return parse_json_response(raw_text)
@@ -440,10 +458,15 @@ Purchase Order Text:
 {po_text}
 """,
     )
+
     raw_text = response.text.strip()
+
     return parse_json_response(raw_text)
 
 
+# =========================
+# BUSINESS LOGIC
+# =========================
 def find_catalog_match(description, sku=""):
     haystack = f"{description} {sku}".lower()
     best_match = None
@@ -451,10 +474,13 @@ def find_catalog_match(description, sku=""):
 
     for entry in PRODUCT_CATALOG:
         score = 0
+
         for alias in entry["aliases"]:
             alias_lower = alias.lower()
+
             if alias_lower in haystack:
                 score = max(score, len(alias_lower))
+
         if score > best_score:
             best_score = score
             best_match = entry
@@ -476,6 +502,7 @@ def build_invoice_details(quote_data, po_data):
     quote_items = [item for item in quote_items if not is_shipping_line(item.get("description", ""))]
 
     products = []
+
     for item in quote_items:
         products.append({
             "description": item.get("description", ""),
@@ -531,24 +558,29 @@ def build_delivery_note_items_from_quote(quote_data):
     quote_items = [item for item in quote_items if not is_shipping_line(item.get("description", ""))]
 
     delivery_items = []
+
     for item in quote_items:
         desc = item.get("description", "")
         sku = item.get("sku", "")
         match = find_catalog_match(desc, sku)
 
-        product_name_for_storage = desc if desc else ("" if match is None else match["title"])
-
-        
-        product_name_for_storage = "" if match is None else match["title"]
+        if match is not None:
+            official_title = match["title"]
+            reagents = [standardize_component_name(r) for r in match["reagents"]]
+            storage_note = build_standard_storage_text(official_title)
+        else:
+            official_title = desc
+            reagents = []
+            storage_note = ""
 
         delivery_items.append({
             "description": desc,
             "sku": sku,
             "quantity": item.get("quantity", ""),
             "catalog_match": match,
-            "display_title": "" if match is None else match["title"],
-            "reagents": [] if match is None else [standardize_component_name(r) for r in match["reagents"]],
-            "storage_note": build_standard_storage_text(product_name_for_storage) if match is not None else ""
+            "display_title": official_title,
+            "reagents": reagents,
+            "storage_note": storage_note
         })
 
     return delivery_items
@@ -556,23 +588,29 @@ def build_delivery_note_items_from_quote(quote_data):
 
 def build_delivery_note_preview_df(delivery_items):
     rows = []
+
     for idx, item in enumerate(delivery_items, start=1):
         rows.append({
             "item_index": idx,
             "quoted_product": item["description"],
             "quantity": item["quantity"],
-            "display_title": item.get("display_title", ""),
+            "delivery_title": item.get("display_title", ""),
             "catalog_matched": "" if item["catalog_match"] is None else item["catalog_match"]["title"],
-            "reagents_count": len(item.get("reagents", [])),
+            "contents_count": len(item.get("reagents", [])),
             "storage_note": item.get("storage_note", "")
         })
+
     return pd.DataFrame(rows)
 
 
+# =========================
+# EXCEL HELPERS
+# =========================
 def choose_template_sheet_name(wb):
     for candidate in ["251208", "251015", "260330"]:
         if candidate in wb.sheetnames:
             return candidate
+
     return wb.sheetnames[0]
 
 
@@ -604,12 +642,11 @@ def populate_delivery_note_template(workbook_path, output_path, po_number, displ
 
     ws.sheet_view.showGridLines = False
 
+    # Only update the few fields the new template needs.
     set_cell_value_safe(ws, cell_ref="G16", value=f"PO# {po_number}" if po_number else "PO#")
     set_cell_value_safe(ws, cell_ref="G18", value=display_title)
-    set_cell_value_safe(ws, cell_ref="G19", value="Reagents")
-    set_cell_value_safe(ws, cell_ref="W19", value="Lot#")
-    set_cell_value_safe(ws, cell_ref="AC19", value="Exp")
 
+    # Contents section.
     for row in range(20, 35):
         set_cell_value_safe(ws, row=row, col=7, value="")
         set_cell_value_safe(ws, row=row, col=23, value="")
@@ -623,6 +660,7 @@ def populate_delivery_note_template(workbook_path, output_path, po_number, displ
         set_cell_value_safe(ws, row=row, col=29, value="")
         set_cell_value_safe(ws, row=row, col=30, value="")
 
+    # Storage and support section.
     set_cell_value_safe(ws, cell_ref="A28", value=storage_note)
 
     wb.save(output_path)
@@ -636,8 +674,10 @@ def generate_delivery_note_files(po_data, delivery_items, output_dir):
 
     for idx, item in enumerate(matched_items, start=1):
         safe_name = re.sub(r"[^A-Za-z0-9 _()]+", "", item.get("display_title", "")).strip()
+
         if not safe_name:
             safe_name = f"delivery_note_{idx}"
+
         filename = f"{po_data.get('po_number', 'PO')}_{idx}_{safe_name}.xlsx"
         output_path = os.path.join(output_dir, filename)
 
@@ -649,6 +689,7 @@ def generate_delivery_note_files(po_data, delivery_items, output_dir):
             item.get("reagents", []),
             item.get("storage_note", "")
         )
+
         output_files.append(output_path)
 
     return output_files
@@ -663,6 +704,9 @@ def create_zip_bundle(output_zip_path, quote_file, po_file, delivery_note_paths)
             zipf.write(dn_path, arcname=os.path.basename(dn_path))
 
 
+# =========================
+# GEMINI Q AND A PLUS EDITS
+# =========================
 def ask_question_about_docs(question, quote_data, po_data, delivery_items):
     prompt = f"""
 You are answering questions about a Quote, a Purchase Order, and the current delivery note draft.
@@ -683,10 +727,12 @@ Current delivery note draft:
 User question:
 {question}
 """
+
     response = client.models.generate_content(
         model="gemini-3-flash-preview",
         contents=prompt,
     )
+
     return response.text.strip()
 
 
@@ -695,18 +741,19 @@ def interpret_delivery_note_edit(request_text, delivery_items, po_data):
 You convert user edit requests into structured JSON edits for a delivery note draft.
 
 Only use these allowed action types:
-- update_po_number
-- update_item_title
-- add_reagent
-- remove_reagent
-- replace_reagent
+update_po_number
+update_item_title
+add_reagent
+remove_reagent
+replace_reagent
 
 Rules:
 1. item_index is 1 based.
 2. Return only JSON.
 3. If the request is unclear, return an empty actions list.
 4. Do not invent items that are not in the draft.
-5. Do not edit storage note text.
+5. Do not edit storage note text directly.
+6. If product title changes, storage note will be regenerated automatically.
 
 Current delivery note draft:
 {json.dumps(delivery_items, indent=2)}
@@ -730,10 +777,12 @@ Return this schema:
 User request:
 {request_text}
 """
+
     response = client.models.generate_content(
         model="gemini-3-flash-preview",
         contents=prompt,
     )
+
     return parse_json_response(response.text)
 
 
@@ -761,27 +810,36 @@ def apply_delivery_note_edits(delivery_items, po_data, edit_plan):
         if action_type == "update_item_title":
             item["display_title"] = action.get("value", "")
             item["storage_note"] = build_standard_storage_text(item["display_title"])
-            applied.append(f'Updated item {item_index} title')
+            applied.append(f"Updated item {item_index} title")
+
         elif action_type == "add_reagent":
-            value = action.get("value", "")
+            value = standardize_component_name(action.get("value", ""))
+
             if value and value not in item["reagents"]:
                 item["reagents"].append(value)
-                applied.append(f'Added reagent to item {item_index}')
+                applied.append(f"Added content line to item {item_index}")
+
         elif action_type == "remove_reagent":
-            value = action.get("value", "")
+            value = standardize_component_name(action.get("value", ""))
+
             if value in item["reagents"]:
                 item["reagents"].remove(value)
-                applied.append(f'Removed reagent from item {item_index}')
+                applied.append(f"Removed content line from item {item_index}")
+
         elif action_type == "replace_reagent":
-            old_value = action.get("old_value", "")
-            new_value = action.get("new_value", "")
+            old_value = standardize_component_name(action.get("old_value", ""))
+            new_value = standardize_component_name(action.get("new_value", ""))
+
             if old_value in item["reagents"]:
                 item["reagents"] = [new_value if r == old_value else r for r in item["reagents"]]
-                applied.append(f'Replaced reagent on item {item_index}')
+                applied.append(f"Replaced content line on item {item_index}")
 
     return updated_items, updated_po_data, applied
 
 
+# =========================
+# STREAMLIT UI
+# =========================
 st.sidebar.header("Upload Files")
 quote_file = st.sidebar.file_uploader("Upload Quote", type=["pdf", "txt"], key="quote")
 po_file = st.sidebar.file_uploader("Upload PO", type=["pdf", "txt"], key="po")
@@ -833,9 +891,8 @@ if "quote_data" in st.session_state and "po_data" in st.session_state and "deliv
     st.subheader("Extracted PO JSON")
     st.json(po_data)
 
-    po_checks_df = build_po_checks(po_data)
     st.subheader("PO Checks")
-    st.dataframe(po_checks_df, use_container_width=True)
+    st.dataframe(build_po_checks(po_data), use_container_width=True)
 
     invoice_details = build_invoice_details(quote_data, po_data)
 
@@ -870,6 +927,7 @@ if "quote_data" in st.session_state and "po_data" in st.session_state and "deliv
         st.write(invoice_details["shipping_fee"] or "Missing")
 
     st.markdown("**Products for Invoice**")
+
     if invoice_details["products"]:
         st.dataframe(pd.DataFrame(invoice_details["products"]), use_container_width=True)
     else:
@@ -877,11 +935,14 @@ if "quote_data" in st.session_state and "po_data" in st.session_state and "deliv
 
     st.subheader("Ask About the PO or Quote")
     qa_question = st.text_input("Ask a question about the Quote, PO, or current delivery note draft")
+
     if st.button("Ask Gemini"):
         try:
             with st.spinner("Thinking..."):
                 answer = ask_question_about_docs(qa_question, quote_data, po_data, delivery_items)
+
             st.session_state["qa_answer"] = answer
+
         except Exception as e:
             st.error(f"Question error: {e}")
 
@@ -893,6 +954,7 @@ if "quote_data" in st.session_state and "po_data" in st.session_state and "deliv
     st.dataframe(build_delivery_note_preview_df(delivery_items), use_container_width=True)
 
     edit_request = st.text_input("Request an edit to the delivery note draft")
+
     if st.button("Apply Delivery Note Edit"):
         try:
             with st.spinner("Applying edit..."):
@@ -905,15 +967,18 @@ if "quote_data" in st.session_state and "po_data" in st.session_state and "deliv
 
             if not applied:
                 st.info("No clear edit was applied.")
+
         except Exception as e:
             st.error(f"Edit error: {e}")
 
     if st.session_state.get("edit_log"):
         st.markdown("**Applied edits**")
+
         for line in st.session_state["edit_log"]:
             st.write(f"• {line}")
 
     unmatched = [item for item in delivery_items if item["catalog_match"] is None]
+
     for item in unmatched:
         st.warning(f'No catalog match found for quoted item: {item["description"]}')
 
@@ -927,7 +992,11 @@ if "quote_data" in st.session_state and "po_data" in st.session_state and "deliv
             try:
                 with tempfile.TemporaryDirectory() as temp_dir:
                     dn_output_dir = os.path.join(temp_dir, "delivery_notes")
-                    delivery_note_files = generate_delivery_note_files(st.session_state["po_data"], st.session_state["delivery_items"], dn_output_dir)
+                    delivery_note_files = generate_delivery_note_files(
+                        st.session_state["po_data"],
+                        st.session_state["delivery_items"],
+                        dn_output_dir
+                    )
 
                     if not delivery_note_files:
                         st.error("No delivery note files were generated because no quoted products matched the catalog.")
