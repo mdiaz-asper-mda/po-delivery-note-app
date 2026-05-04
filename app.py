@@ -645,60 +645,54 @@ def copy_row_format(ws, source_row, target_row):
 
 def populate_delivery_note_template(workbook_path, output_path, po_number, delivery_items):
     wb = load_workbook(workbook_path)
-    ws = wb[choose_template_sheet_name(wb)]
+    ws = wb.active
 
-    ws.sheet_view.showGridLines = False
+    # -------------------
+    # PO NUMBER
+    # -------------------
+    ws["G16"] = f"PO# {po_number}" if po_number else "PO#"
 
     matched_items = [item for item in delivery_items if item["catalog_match"] is not None]
 
-    set_cell_value_safe(ws, cell_ref="G16", value=f"PO# {po_number}" if po_number else "PO#")
+    # -------------------
+    # PRODUCT 1
+    # -------------------
+    if len(matched_items) >= 1:
+        item1 = matched_items[0]
 
-    product_start_row = 18
-    storage_start_row = 40
-    current_row = product_start_row
+        ws["G18"] = item1["display_title"]               # [Product name]
+        ws["G20"] = item1["display_title"]               # [Product full name]
 
-    required_product_rows = 0
-    for item in matched_items:
-        required_product_rows += 2 + len(item.get("contents", []))
+        start_row = 21
+        for i, comp in enumerate(item1["contents"]):
+            ws[f"G{start_row + i}"] = standardize_component_name(comp)
 
-    existing_product_rows = storage_start_row - product_start_row
+    # -------------------
+    # PRODUCT 2 (optional)
+    # -------------------
+    if len(matched_items) >= 2:
+        item2 = matched_items[1]
 
-    if required_product_rows > existing_product_rows:
-        rows_to_add = required_product_rows - existing_product_rows
-        ws.insert_rows(storage_start_row, rows_to_add)
+        ws["G30"] = item2["display_title"]
+        ws["G32"] = item2["display_title"]
 
-        for offset in range(rows_to_add):
-            copy_row_format(ws, storage_start_row - 1, storage_start_row + offset)
+        start_row = 33
+        for i, comp in enumerate(item2["contents"]):
+            ws[f"G{start_row + i}"] = standardize_component_name(comp)
 
-        storage_start_row += rows_to_add
+    # -------------------
+    # STORAGE LINE
+    # -------------------
+    product_names = [item["display_title"] for item in matched_items]
 
-    for row in range(product_start_row, storage_start_row):
-        for col in [7, 20, 25, 28]:
-            set_cell_value_safe(ws, row=row, col=col, value="")
+    if len(product_names) == 1:
+        storage_text = f'Please store {product_names[0]} in LN2 storage upon receipt.'
+    elif len(product_names) == 2:
+        storage_text = f'Please store {product_names[0]} and {product_names[1]} in LN2 storage upon receipt.'
+    else:
+        storage_text = f'Please store all products in LN2 storage upon receipt.'
 
-    for item in matched_items:
-        title = item.get("display_title", "")
-        contents = item.get("contents", [])
-
-        set_cell_value_safe(ws, row=current_row, col=7, value=title)
-        current_row += 1
-
-        set_cell_value_safe(ws, row=current_row, col=7, value="Contents")
-        set_cell_value_safe(ws, row=current_row, col=20, value="Lot#")
-        set_cell_value_safe(ws, row=current_row, col=25, value="Exp.")
-        set_cell_value_safe(ws, row=current_row, col=28, value="Box")
-        current_row += 1
-
-        for content in contents:
-            set_cell_value_safe(ws, row=current_row, col=7, value=content)
-            set_cell_value_safe(ws, row=current_row, col=20, value="")
-            set_cell_value_safe(ws, row=current_row, col=25, value="")
-            set_cell_value_safe(ws, row=current_row, col=28, value="")
-            current_row += 1
-
-    product_names = [item.get("display_title", "") for item in matched_items]
-    set_cell_value_safe(ws, row=storage_start_row, col=1, value=build_ln2_storage_line(product_names))
-    set_cell_value_safe(ws, row=storage_start_row + 1, col=1, value="Please store all Components in -20°C or -80°C storage upon receipt.")
+    ws["A45"] = storage_text
 
     wb.save(output_path)
 
