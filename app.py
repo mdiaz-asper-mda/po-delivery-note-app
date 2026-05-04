@@ -2,7 +2,6 @@ import os
 import io
 import re
 import json
-import zipfile
 import tempfile
 from copy import deepcopy
 from datetime import datetime
@@ -16,12 +15,10 @@ from google import genai
 from google.genai import types
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
+from copy import copy
 
 
-# =========================
-# CONFIG
-# =========================
-TEMPLATE_PATH = "Trailhead Biosystems Inc_Delivery Note (2).xlsx"
+TEMPLATE_PATH = "TEMPLATE_PO_APP_260504.xlsx"
 
 st.set_page_config(page_title="Invoice and Delivery Note Tool", layout="wide")
 st.title("Invoice and Delivery Note Tool")
@@ -39,9 +36,6 @@ if not api_key:
 client = genai.Client(api_key=api_key)
 
 
-# =========================
-# PRODUCT CATALOG
-# =========================
 PRODUCT_CATALOG = [
     {
         "key": "excitatory_cells",
@@ -236,9 +230,6 @@ PRODUCT_CATALOG = [
 ]
 
 
-# =========================
-# BASIC HELPERS
-# =========================
 def parse_json_response(raw_text):
     raw_text = raw_text.strip()
 
@@ -326,21 +317,21 @@ def standardize_component_name(text):
     return text
 
 
-def build_standard_storage_text(product_name):
-    return (
-        "Store all Component in -20C or -80C storage upon receipt.\n"
-        f'Store "{product_name}" in LN2 storage upon receipt.\n\n'
-        "Support:\n"
-        "In case you need any assistance from us, please do not hesitate to email us or call us at\n"
-        "Email: cs@biosciences.ricoh.com\n"
-        "Phone: +1-443-869-5420\n\n"
-        "We look forward to providing more products and services to you in the future."
-    )
+def build_ln2_storage_line(product_names):
+    names = [name for name in product_names if name]
+
+    if not names:
+        product_text = "the purchased product"
+    elif len(names) == 1:
+        product_text = names[0]
+    elif len(names) == 2:
+        product_text = f"{names[0]} and {names[1]}"
+    else:
+        product_text = ", ".join(names[:-1]) + f", and {names[-1]}"
+
+    return f"Please store {product_text} in LN2 storage upon receipt."
 
 
-# =========================
-# GEMINI EXTRACTION
-# =========================
 @st.cache_data(show_spinner=False)
 def extract_quote_json_cached(file_bytes, mime_type):
     if mime_type == "application/pdf":
@@ -464,9 +455,6 @@ Purchase Order Text:
     return parse_json_response(raw_text)
 
 
-# =========================
-# BUSINESS LOGIC
-# =========================
 def find_catalog_match(description, sku=""):
     haystack = f"{description} {sku}".lower()
     best_match = None
@@ -566,12 +554,10 @@ def build_delivery_note_items_from_quote(quote_data):
 
         if match is not None:
             official_title = match["title"]
-            reagents = [standardize_component_name(r) for r in match["reagents"]]
-            storage_note = build_standard_storage_text(official_title)
+            contents = [standardize_component_name(r) for r in match["reagents"]]
         else:
             official_title = desc
-            reagents = []
-            storage_note = ""
+            contents = []
 
         delivery_items.append({
             "description": desc,
@@ -579,8 +565,7 @@ def build_delivery_note_items_from_quote(quote_data):
             "quantity": item.get("quantity", ""),
             "catalog_match": match,
             "display_title": official_title,
-            "reagents": reagents,
-            "storage_note": storage_note
+            "contents": contents
         })
 
     return delivery_items
@@ -596,18 +581,14 @@ def build_delivery_note_preview_df(delivery_items):
             "quantity": item["quantity"],
             "delivery_title": item.get("display_title", ""),
             "catalog_matched": "" if item["catalog_match"] is None else item["catalog_match"]["title"],
-            "contents_count": len(item.get("reagents", [])),
-            "storage_note": item.get("storage_note", "")
+            "contents_count": len(item.get("contents", []))
         })
 
     return pd.DataFrame(rows)
 
 
-# =========================
-# EXCEL HELPERS
-# =========================
 def choose_template_sheet_name(wb):
-    for candidate in ["251208", "251015", "260330"]:
+    for candidate in ["260306", "251208", "251015", "260330"]:
         if candidate in wb.sheetnames:
             return candidate
 
@@ -636,29 +617,30 @@ def set_cell_value_safe(ws, cell_ref=None, row=None, col=None, value=""):
     target.value = value
 
 
-def build_combined_storage_text(delivery_items):
-    product_names = []
+def copy_row_format(ws, source_row, target_row):
+    for col in range(1, ws.max_column + 1):
+        source = ws.cell(source_row, col)
+        target = ws.cell(target_row, col)
 
-    for item in delivery_items:
-        name = item.get("display_title", "")
-        if name and name not in product_names:
-            product_names.append(name)
+        if source.has_style:
+            target._style = copy(source._style)
 
-    product_storage_lines = [
-        f'Store "{name}" in LN2 storage upon receipt.'
-        for name in product_names
-    ]
+        if source.number_format:
+            target.number_format = source.number_format
 
-    return (
-        "Store all Component in -20C or -80C storage upon receipt.\n"
-        + "\n".join(product_storage_lines)
-        + "\n\n"
-        + "Support:\n"
-        + "In case you need any assistance from us, please do not hesitate to email us or call us at\n"
-        + "Email: cs@biosciences.ricoh.com\n"
-        + "Phone: +1-443-869-5420\n\n"
-        + "We look forward to providing more products and services to you in the future."
-    )
+        if source.alignment:
+            target.alignment = copy(source.alignment)
+
+        if source.font:
+            target.font = copy(source.font)
+
+        if source.fill:
+            target.fill = copy(source.fill)
+
+        if source.border:
+            target.border = copy(source.border)
+
+    ws.row_dimensions[target_row].height = ws.row_dimensions[source_row].height
 
 
 def populate_delivery_note_template(workbook_path, output_path, po_number, delivery_items):
@@ -671,53 +653,63 @@ def populate_delivery_note_template(workbook_path, output_path, po_number, deliv
 
     set_cell_value_safe(ws, cell_ref="G16", value=f"PO# {po_number}" if po_number else "PO#")
 
-    # Clear old product area
-    for row in range(18, 90):
-        set_cell_value_safe(ws, row=row, col=7, value="")
-        set_cell_value_safe(ws, row=row, col=23, value="")
-        set_cell_value_safe(ws, row=row, col=29, value="")
-        set_cell_value_safe(ws, row=row, col=30, value="")
+    product_start_row = 18
+    storage_start_row = 40
+    current_row = product_start_row
 
-    current_row = 18
+    required_product_rows = 0
+    for item in matched_items:
+        required_product_rows += 2 + len(item.get("contents", []))
+
+    existing_product_rows = storage_start_row - product_start_row
+
+    if required_product_rows > existing_product_rows:
+        rows_to_add = required_product_rows - existing_product_rows
+        ws.insert_rows(storage_start_row, rows_to_add)
+
+        for offset in range(rows_to_add):
+            copy_row_format(ws, storage_start_row - 1, storage_start_row + offset)
+
+        storage_start_row += rows_to_add
+
+    for row in range(product_start_row, storage_start_row):
+        for col in [7, 20, 25, 28]:
+            set_cell_value_safe(ws, row=row, col=col, value="")
 
     for item in matched_items:
         title = item.get("display_title", "")
-        reagents = item.get("reagents", [])
+        contents = item.get("contents", [])
 
         set_cell_value_safe(ws, row=current_row, col=7, value=title)
         current_row += 1
 
-        set_cell_value_safe(ws, row=current_row, col=7, value="Reagents")
-        set_cell_value_safe(ws, row=current_row, col=23, value="Lot#")
-        set_cell_value_safe(ws, row=current_row, col=29, value="Exp")
+        set_cell_value_safe(ws, row=current_row, col=7, value="Contents")
+        set_cell_value_safe(ws, row=current_row, col=20, value="Lot#")
+        set_cell_value_safe(ws, row=current_row, col=25, value="Exp.")
+        set_cell_value_safe(ws, row=current_row, col=28, value="Box")
         current_row += 1
 
-        for reagent in reagents:
-            set_cell_value_safe(ws, row=current_row, col=7, value=standardize_component_name(reagent))
-            set_cell_value_safe(ws, row=current_row, col=23, value="")
-            set_cell_value_safe(ws, row=current_row, col=29, value="")
-            set_cell_value_safe(ws, row=current_row, col=30, value="")
+        for content in contents:
+            set_cell_value_safe(ws, row=current_row, col=7, value=content)
+            set_cell_value_safe(ws, row=current_row, col=20, value="")
+            set_cell_value_safe(ws, row=current_row, col=25, value="")
+            set_cell_value_safe(ws, row=current_row, col=28, value="")
             current_row += 1
 
-        # Blank space between product sections
-        current_row += 2
-
-    storage_text = build_combined_storage_text(matched_items)
-
-    # Put storage and support section after all product blocks
-    storage_row = current_row + 1
-    set_cell_value_safe(ws, row=storage_row, col=1, value=storage_text)
+    product_names = [item.get("display_title", "") for item in matched_items]
+    set_cell_value_safe(ws, row=storage_start_row, col=1, value=build_ln2_storage_line(product_names))
+    set_cell_value_safe(ws, row=storage_start_row + 1, col=1, value="Please store all Components in -20°C or -80°C storage upon receipt.")
 
     wb.save(output_path)
 
 
-def generate_delivery_note_files(po_data, delivery_items, output_dir):
+def generate_delivery_note_file(po_data, delivery_items, output_dir):
     os.makedirs(output_dir, exist_ok=True)
 
     matched_items = [item for item in delivery_items if item["catalog_match"] is not None]
 
     if not matched_items:
-        return []
+        return None
 
     po_number = po_data.get("po_number", "PO")
     safe_po = re.sub(r"[^A-Za-z0-9 _()]+", "", po_number).strip() or "PO"
@@ -732,21 +724,9 @@ def generate_delivery_note_files(po_data, delivery_items, output_dir):
         matched_items
     )
 
-    return [output_path]
+    return output_path
 
 
-def create_zip_bundle(output_zip_path, quote_file, po_file, delivery_note_paths):
-    with zipfile.ZipFile(output_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
-        zipf.writestr(quote_file.name, quote_file.getvalue())
-        zipf.writestr(po_file.name, po_file.getvalue())
-
-        for dn_path in delivery_note_paths:
-            zipf.write(dn_path, arcname=os.path.basename(dn_path))
-
-
-# =========================
-# GEMINI Q AND A PLUS EDITS
-# =========================
 def ask_question_about_docs(question, quote_data, po_data, delivery_items):
     prompt = f"""
 You are answering questions about a Quote, a Purchase Order, and the current delivery note draft.
@@ -783,17 +763,16 @@ You convert user edit requests into structured JSON edits for a delivery note dr
 Only use these allowed action types:
 update_po_number
 update_item_title
-add_reagent
-remove_reagent
-replace_reagent
+add_content
+remove_content
+replace_content
 
 Rules:
 1. item_index is 1 based.
 2. Return only JSON.
 3. If the request is unclear, return an empty actions list.
 4. Do not invent items that are not in the draft.
-5. Do not edit storage note text directly.
-6. If product title changes, storage note will be regenerated automatically.
+5. If product title changes, storage line will be regenerated automatically.
 
 Current delivery note draft:
 {json.dumps(delivery_items, indent=2)}
@@ -849,37 +828,33 @@ def apply_delivery_note_edits(delivery_items, po_data, edit_plan):
 
         if action_type == "update_item_title":
             item["display_title"] = action.get("value", "")
-            item["storage_note"] = build_standard_storage_text(item["display_title"])
             applied.append(f"Updated item {item_index} title")
 
-        elif action_type == "add_reagent":
+        elif action_type == "add_content":
             value = standardize_component_name(action.get("value", ""))
 
-            if value and value not in item["reagents"]:
-                item["reagents"].append(value)
+            if value and value not in item["contents"]:
+                item["contents"].append(value)
                 applied.append(f"Added content line to item {item_index}")
 
-        elif action_type == "remove_reagent":
+        elif action_type == "remove_content":
             value = standardize_component_name(action.get("value", ""))
 
-            if value in item["reagents"]:
-                item["reagents"].remove(value)
+            if value in item["contents"]:
+                item["contents"].remove(value)
                 applied.append(f"Removed content line from item {item_index}")
 
-        elif action_type == "replace_reagent":
+        elif action_type == "replace_content":
             old_value = standardize_component_name(action.get("old_value", ""))
             new_value = standardize_component_name(action.get("new_value", ""))
 
-            if old_value in item["reagents"]:
-                item["reagents"] = [new_value if r == old_value else r for r in item["reagents"]]
+            if old_value in item["contents"]:
+                item["contents"] = [new_value if r == old_value else r for r in item["contents"]]
                 applied.append(f"Replaced content line on item {item_index}")
 
     return updated_items, updated_po_data, applied
 
 
-# =========================
-# STREAMLIT UI
-# =========================
 st.sidebar.header("Upload Files")
 quote_file = st.sidebar.file_uploader("Upload Quote", type=["pdf", "txt"], key="quote")
 po_file = st.sidebar.file_uploader("Upload PO", type=["pdf", "txt"], key="po")
@@ -1023,41 +998,35 @@ if "quote_data" in st.session_state and "po_data" in st.session_state and "deliv
         st.warning(f'No catalog match found for quoted item: {item["description"]}')
 
     if not os.path.exists(TEMPLATE_PATH):
-        st.warning(f'Put "{TEMPLATE_PATH}" in the same folder as app.py to generate delivery notes.')
+        st.warning(f'Put "{TEMPLATE_PATH}" in the same folder as app.py to generate the delivery note.')
 
     matched_count = sum(1 for item in delivery_items if item["catalog_match"] is not None)
 
     if matched_count > 0 and os.path.exists(TEMPLATE_PATH):
-        if st.button("Generate Zip Bundle"):
+        if st.button("Generate Delivery Note XLSX"):
             try:
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    dn_output_dir = os.path.join(temp_dir, "delivery_notes")
-                    delivery_note_files = generate_delivery_note_files(
+                    delivery_note_path = generate_delivery_note_file(
                         st.session_state["po_data"],
                         st.session_state["delivery_items"],
-                        dn_output_dir
+                        temp_dir
                     )
 
-                    if not delivery_note_files:
-                        st.error("No delivery note files were generated because no quoted products matched the catalog.")
+                    if not delivery_note_path:
+                        st.error("No delivery note was generated because no quoted products matched the catalog.")
                         st.stop()
 
-                    zip_name = datetime.now().strftime("%y%m%d") + ".zip"
-                    zip_path = os.path.join(temp_dir, zip_name)
-
-                    create_zip_bundle(zip_path, quote_file, po_file, delivery_note_files)
-
-                    with open(zip_path, "rb") as f:
-                        st.success("Zip bundle generated.")
+                    with open(delivery_note_path, "rb") as f:
+                        st.success("Delivery note generated.")
                         st.download_button(
-                            label=f"Download {zip_name}",
+                            label="Download Delivery Note XLSX",
                             data=f.read(),
-                            file_name=zip_name,
-                            mime="application/zip"
+                            file_name=os.path.basename(delivery_note_path),
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
 
             except Exception as e:
-                st.error(f"Error while generating zip bundle: {e}")
+                st.error(f"Error while generating delivery note: {e}")
 
     st.subheader("Reminders")
     st.write("1. Tag admin")
