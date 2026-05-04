@@ -26,7 +26,7 @@ else:
     load_dotenv()
     api_key = os.getenv("GEMINI_API_KEY")
 
-TEMPLATE_PATH = "Trailhead Biosystems Inc_Delivery Note.xlsx"
+TEMPLATE_PATH = "Trailhead Biosystems Inc_Delivery Note (2).xlsx"
 
 st.set_page_config(page_title="Invoice and Delivery Note Tool", layout="wide")
 st.title("Invoice and Delivery Note Tool")
