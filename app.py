@@ -643,9 +643,14 @@ def copy_row_format(ws, source_row, target_row):
     ws.row_dimensions[target_row].height = ws.row_dimensions[source_row].height
 
 
+from openpyxl.styles import Font
+
 def populate_delivery_note_template(workbook_path, output_path, po_number, delivery_items):
     wb = load_workbook(workbook_path)
     ws = wb.active
+
+    blue_font = Font(color="0000FF")
+    black_font = Font(color="000000")
 
     # -------------------
     # PO NUMBER
@@ -660,25 +665,37 @@ def populate_delivery_note_template(workbook_path, output_path, po_number, deliv
     if len(matched_items) >= 1:
         item1 = matched_items[0]
 
-        ws["G18"] = item1["display_title"]  # Product name
-        ws["G20"] = item1["display_title"]  # Full name
+        ws["G18"] = item1["display_title"]
 
+        # Full name (BLUE)
+        ws["G20"] = item1["contents"][0] if item1["contents"] else ""
+        ws["G20"].font = blue_font
+
+        # Components (BLACK)
         start_row = 21
-        for i, comp in enumerate(item1["contents"]):
-            ws[f"G{start_row + i}"] = standardize_component_name(comp)
+        for i, comp in enumerate(item1["contents"][1:]):
+            cell = ws[f"G{start_row + i}"]
+            cell.value = standardize_component_name(comp)
+            cell.font = black_font
 
     # -------------------
-    # PRODUCT 2 (FIXED ROW)
+    # PRODUCT 2 (SHIFTED UP)
     # -------------------
     if len(matched_items) >= 2:
         item2 = matched_items[1]
 
-        ws["G29"] = item2["display_title"]  # <-- FIXED HERE
-        ws["G31"] = item2["display_title"]
+        ws["G29"] = item2["display_title"]
 
+        # Full name (BLUE) ← FIXED ROW
+        ws["G31"] = item2["contents"][0] if item2["contents"] else ""
+        ws["G31"].font = blue_font
+
+        # Components (BLACK) ← SHIFTED UP
         start_row = 32
-        for i, comp in enumerate(item2["contents"]):
-            ws[f"G{start_row + i}"] = standardize_component_name(comp)
+        for i, comp in enumerate(item2["contents"][1:]):
+            cell = ws[f"G{start_row + i}"]
+            cell.value = standardize_component_name(comp)
+            cell.font = black_font
 
     # -------------------
     # STORAGE LINE
