@@ -674,9 +674,9 @@ def populate_delivery_note_template(workbook_path, output_path, po_number, deliv
         item2 = matched_items[1]
 
         ws["G29"] = item2["display_title"]  # <-- FIXED HERE
-        ws["G32"] = item2["display_title"]
+        ws["G31"] = item2["display_title"]
 
-        start_row = 33
+        start_row = 32
         for i, comp in enumerate(item2["contents"]):
             ws[f"G{start_row + i}"] = standardize_component_name(comp)
 
